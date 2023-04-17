@@ -15,7 +15,10 @@ import eu.kanade.tachiyomi.source.model.SManga
 import eu.kanade.tachiyomi.source.online.HttpSource
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -46,48 +49,18 @@ class HoneyManga : HttpSource() {
     // ----- requests -----
 
     override fun popularMangaRequest(page: Int): Request {
-        val requestBody =
-            """
-                {
-                  "page": $page,
-                  "pageSize": $DEFAULT_PAGE_SIZE,
-                  "sort": {
-                    "sortBy": "likes",
-                    "sortOrder": "DESC"
-                  }
-                }
-            """
-                .trimIndent()
-                .toRequestBody(
-                    "application/json; charset=utf-8".toMediaTypeOrNull(),
-                )
         return POST(
-            url = "$API_URL/v2/manga/cursor-list",
-            headers = headersBuilder().build(),
-            body = requestBody,
+            "$API_URL/v2/manga/cursor-list",
+            headers,
+            makeHoneyMangaRequestBody(page, "likes"),
         )
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-        val requestBody =
-            """
-                {
-                  "page": $page,
-                  "pageSize": $DEFAULT_PAGE_SIZE,
-                  "sort": {
-                    "sortBy": "lastUpdated",
-                    "sortOrder": "DESC"
-                  }
-                }
-            """
-                .trimIndent()
-                .toRequestBody(
-                    "application/json; charset=utf-8".toMediaTypeOrNull(),
-                )
         return POST(
-            url = "$API_URL/v2/manga/cursor-list",
-            headers = headersBuilder().build(),
-            body = requestBody,
+            "$API_URL/v2/manga/cursor-list",
+            headers,
+            makeHoneyMangaRequestBody(page, "lastUpdated"),
         )
     }
 
@@ -98,7 +71,7 @@ class HoneyManga : HttpSource() {
                     .newBuilder()
                     .addQueryParameter("query", query)
                     .toString(),
-                headersBuilder().build(),
+                headers,
             )
         } else {
             throw UnsupportedOperationException("Запит має містити щонайменше 3 символи / The query must contain at least 3 characters")
@@ -110,21 +83,23 @@ class HoneyManga : HttpSource() {
             .addQueryParameter("mangaId", manga.url.substringAfterLast('/'))
             .addQueryParameter("sortOrder", "DESC")
             .addQueryParameter("page", "1")
-            .addQueryParameter("pageSize", "1000") // most likely there will not be any more
+            .addQueryParameter("pageSize", "10000") // most likely there will not be any more pageSize
             .build().toString()
-        return GET(url, headersBuilder().build())
+        return GET(url, headers)
     }
 
     override fun mangaDetailsRequest(manga: SManga): Request = mangaDetailsRequest(manga.url)
 
     private fun mangaDetailsRequest(mangaUrl: String): Request {
-        return GET(mangaUrl, headersBuilder().build())
+        val mangaId = mangaUrl.substringAfterLast('/')
+        val url = "https://data.api.honey-manga.com.ua/manga/$mangaId"
+        return GET(url, headers)
     }
 
     override fun pageListRequest(chapter: SChapter): Request {
-        val chapterId = chapter.url.substringAfterLast('/')
+        val chapterId = chapter.url.substringBeforeLast('/').substringAfterLast('/')
         val url = "$API_URL/chapter/frames/$chapterId"
-        return GET(url, headersBuilder().build())
+        return GET(url, headers)
     }
 
     // ----- parse -----
@@ -143,7 +118,7 @@ class HoneyManga : HttpSource() {
         val result = response.asClass<List<HoneyMangaChapterDto>>()
         return result.map {
             SChapter.create().apply {
-                url = "$API_URL/chapter/frames/${it.id}"
+                url = "$baseUrl/read/${it.id}/${it.mangaId}"
                 name = "Vol. ${it.volume} Ch. ${it.chapterNum}" + (if (it.subChapterNum == 0) "" else ".${it.subChapterNum}")
                 date_upload = parseDate(it.lastUpdated)
             }
@@ -152,16 +127,13 @@ class HoneyManga : HttpSource() {
 
     override fun pageListParse(response: Response): List<Page> {
         return response.asClass<HoneyMangaChapterPagesDto>().resourceIds.toList().map {
-            Page(index = it.first.toInt(), url = "", imageUrl = "$IMAGE_STORAGE_URL/${it.second.jsonPrimitive.content}")
+            Page(it.first.toInt(), "", "$IMAGE_STORAGE_URL/${it.second.jsonPrimitive.content}")
         }
     }
 
     override fun imageUrlParse(response: Response): String = ""
 
-    override fun imageRequest(page: Page): Request {
-        val newHeaders = headersBuilder().build()
-        return GET(page.imageUrl!!, newHeaders)
-    }
+    override fun imageRequest(page: Page): Request = GET(page.imageUrl!!, headers)
 
     override fun getMangaUrl(manga: SManga): String = manga.url
 
@@ -181,20 +153,22 @@ class HoneyManga : HttpSource() {
 
         private val userAgent = System.getProperty("http.agent")!!
 
-        private const val ISO_DATE = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+        private val DATE_FORMATTER by lazy {
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.ROOT)
+        }
 
-        private val dateFormat = SimpleDateFormat(ISO_DATE, Locale.ROOT)
-
-        private fun parseDate(dateAsString: String): Long = dateFormat.parse(dateAsString)?.time ?: 0L
+        private fun parseDate(dateString: String): Long = runCatching { DATE_FORMATTER.parse(dateString)?.time }.getOrNull() ?: 0L
 
         private const val DEFAULT_PAGE_SIZE = 30
 
-        private val json = Json {
-            isLenient = true
-            ignoreUnknownKeys = true
+        private val json by lazy {
+            Json {
+                isLenient = true
+                ignoreUnknownKeys = true
+            }
         }
 
-        private inline fun <reified R : Any> Response.asClass() = run { json.decodeFromString<R>(body.string()) }
+        private inline fun <reified R : Any> Response.asClass() = use { json.decodeFromString<R>(body.string()) }
 
         private fun parseAsMangaResponseDto(response: Response): MangasPage {
             val mangaList = response.asClass<HoneyMangaResponseDto>().data
@@ -222,8 +196,20 @@ class HoneyManga : HttpSource() {
                 title = mangaDto.title
                 thumbnail_url =
                     "https://manga-storage.fra1.digitaloceanspaces.com/public-resources/${mangaDto.posterId}"
-                url = "https://data.api.honey-manga.com.ua/manga/${mangaDto.id}"
+                url = "https://honey-manga.com.ua/book/${mangaDto.id}"
+                description = mangaDto.description
             }
         }
+
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
+
+        private fun makeHoneyMangaRequestBody(page: Int, sortBy: String) = buildJsonObject {
+            put("page", page)
+            put("pageSize", DEFAULT_PAGE_SIZE)
+            putJsonObject("sort") {
+                put("sortBy", sortBy)
+                put("sortOrder", "DESC")
+            }
+        }.toString().toRequestBody(JSON_MEDIA_TYPE)
     }
 }
