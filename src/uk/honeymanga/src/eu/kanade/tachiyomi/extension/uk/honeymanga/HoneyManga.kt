@@ -90,12 +90,6 @@ class HoneyManga : HttpSource() {
 
     override fun mangaDetailsRequest(manga: SManga): Request = mangaDetailsRequest(manga.url)
 
-    private fun mangaDetailsRequest(mangaUrl: String): Request {
-        val mangaId = mangaUrl.substringAfterLast('/')
-        val url = "https://data.api.honey-manga.com.ua/manga/$mangaId"
-        return GET(url, headers)
-    }
-
     override fun pageListRequest(chapter: SChapter): Request {
         val chapterId = chapter.url.substringBeforeLast('/').substringAfterLast('/')
         val url = "$API_URL/chapter/frames/$chapterId"
@@ -141,9 +135,49 @@ class HoneyManga : HttpSource() {
 
     override fun fetchImageUrl(page: Page): Observable<String> = Observable.just(page.imageUrl!!)
 
+    // ----- private methods -----
+
+    private fun mangaDetailsRequest(mangaUrl: String): Request {
+        val mangaId = mangaUrl.substringAfterLast('/')
+        val url = "https://data.api.honey-manga.com.ua/manga/$mangaId"
+        return GET(url, headers)
+    }
+
+    private fun parseAsMangaResponseDto(response: Response): MangasPage {
+        val mangaList = response.asClass<HoneyMangaResponseDto>().data
+        return makeMangasPage(mangaList)
+    }
+
+    private fun parseAsMangaResponseArray(response: Response): MangasPage {
+        val mangaList = response.asClass<List<HoneyMangaDto>>()
+        return makeMangasPage(mangaList)
+    }
+
+    private fun makeMangasPage(mangaList: List<HoneyMangaDto>): MangasPage {
+        return MangasPage(
+            makeSMangaList(mangaList),
+            mangaList.size == DEFAULT_PAGE_SIZE,
+        )
+    }
+
+    private fun makeSMangaList(mangaList: List<HoneyMangaDto>): List<SManga> {
+        return mangaList.map(::makeSManga)
+    }
+
+    private fun makeSManga(mangaDto: HoneyMangaDto): SManga {
+        return SManga.create().apply {
+            title = mangaDto.title
+            thumbnail_url =
+                "https://manga-storage.fra1.digitaloceanspaces.com/public-resources/${mangaDto.posterId}"
+            url = "$baseUrl/book/${mangaDto.id}"
+            description = mangaDto.description
+            genre = mangaDto.type
+        }
+    }
+
     companion object {
 
-        // constants and utils
+        // utils and constants
 
         private const val API_URL = "https://data.api.honey-manga.com.ua"
 
@@ -169,38 +203,6 @@ class HoneyManga : HttpSource() {
         }
 
         private inline fun <reified R : Any> Response.asClass() = use { json.decodeFromString<R>(body.string()) }
-
-        private fun parseAsMangaResponseDto(response: Response): MangasPage {
-            val mangaList = response.asClass<HoneyMangaResponseDto>().data
-            return makeMangasPage(mangaList)
-        }
-
-        private fun parseAsMangaResponseArray(response: Response): MangasPage {
-            val mangaList = response.asClass<List<HoneyMangaDto>>()
-            return makeMangasPage(mangaList)
-        }
-
-        private fun makeMangasPage(mangaList: List<HoneyMangaDto>): MangasPage {
-            return MangasPage(
-                makeSMangaList(mangaList),
-                mangaList.size == DEFAULT_PAGE_SIZE,
-            )
-        }
-
-        private fun makeSMangaList(mangaList: List<HoneyMangaDto>): List<SManga> {
-            return mangaList.map(Companion::makeSManga)
-        }
-
-        private fun makeSManga(mangaDto: HoneyMangaDto): SManga {
-            return SManga.create().apply {
-                title = mangaDto.title
-                thumbnail_url =
-                    "https://manga-storage.fra1.digitaloceanspaces.com/public-resources/${mangaDto.posterId}"
-                url = "https://honey-manga.com.ua/book/${mangaDto.id}"
-                description = mangaDto.description
-                genre = mangaDto.type
-            }
-        }
 
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaTypeOrNull()
 
