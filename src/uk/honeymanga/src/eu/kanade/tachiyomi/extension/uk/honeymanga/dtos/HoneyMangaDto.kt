@@ -10,7 +10,6 @@ data class HoneyMangaDto(
     val title: String,
     val description: String?,
     val type: String,
-    val chapters: Int?,
 )
 
 @Serializable

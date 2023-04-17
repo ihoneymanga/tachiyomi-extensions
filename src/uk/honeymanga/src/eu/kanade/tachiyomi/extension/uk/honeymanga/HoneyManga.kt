@@ -183,7 +183,7 @@ class HoneyManga : HttpSource() {
         private fun makeMangasPage(mangaList: List<HoneyMangaDto>): MangasPage {
             return MangasPage(
                 makeSMangaList(mangaList),
-                hasNextPage = mangaList.size == DEFAULT_PAGE_SIZE,
+                mangaList.size == DEFAULT_PAGE_SIZE,
             )
         }
 
@@ -198,6 +198,7 @@ class HoneyManga : HttpSource() {
                     "https://manga-storage.fra1.digitaloceanspaces.com/public-resources/${mangaDto.posterId}"
                 url = "https://honey-manga.com.ua/book/${mangaDto.id}"
                 description = mangaDto.description
+                genre = mangaDto.type
             }
         }
 
